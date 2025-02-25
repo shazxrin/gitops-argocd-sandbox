@@ -1,0 +1,85 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tempo
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    targetRevision: 1.18.1
+    chart: tempo
+    helm:
+      valuesObject:
+        config: |
+          multitenancy_enabled: {{ .Values.tempo.multitenancyEnabled }}
+          usage_report:
+            reporting_enabled: {{ .Values.tempo.reportingEnabled }}
+          compactor:
+            compaction:
+              block_retention: {{ .Values.tempo.retention }}
+          distributor:
+            receivers:
+              {{- toYaml .Values.tempo.receivers | nindent 8 }}
+          ingester:
+            {{- toYaml .Values.tempo.ingester | nindent 6 }}
+          server:
+            {{- toYaml .Values.tempo.server | nindent 6 }}
+          storage:
+            {{- toYaml .Values.tempo.storage | nindent 6 }}
+          querier:
+            {{- toYaml .Values.tempo.querier | nindent 6 }}
+          query_frontend:
+            {{- toYaml .Values.tempo.queryFrontend | nindent 6 }}
+          overrides:
+            {{- toYaml .Values.tempo.global_overrides | nindent 6 }}
+            {{- if .Values.tempo.metricsGenerator.enabled }}
+                metrics_generator_processors:
+                - 'service-graphs'
+                - 'span-metrics'
+          metrics_generator:
+                processor:
+                  service_graphs:
+                    peer_attributes:
+                      - "client.name"
+                      - "peer.service"
+                      - "server.address"
+                      - "network.peer.address:network.peer.port"
+                      - "db.name"
+                storage:
+                  path: "/tmp/tempo"
+                  remote_write:
+                    - url: {{ .Values.tempo.metricsGenerator.remoteWriteUrl }}
+            {{- end }}
+        server:
+          http_listen_port: 3200
+        distributor:
+          receivers:
+            otlp:
+              protocols:
+                http:
+        storage:
+          trace:
+            backend: local
+            wal:
+              path: /tmp/tempo/wal
+            local:
+              path: /tmp/tempo/blocks 
+        tempo:
+          tag: 2.7.0
+          securityContext:
+            allowPrivilegeEscalation: false
+          metricsGenerator:
+            enabled: true
+            remoteWriteUrl: "http://kube-prometheus-stack-prometheus.monitoring:9090/api/v1/write"
+        tempoQuery:
+          tag: 2.7.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

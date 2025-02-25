@@ -1,0 +1,108 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+spec:
+  project: default
+  source:
+    chart: kube-prometheus-stack
+    repoURL: https://prometheus-community.github.io/helm-charts
+    targetRevision: 68.4.4
+    helm:
+      releaseName: kube-prometheus-stack
+      valuesObject:
+        # Note: For some subcharts, a non-empty resources block must be provided. Otherwise, 
+        # ArgoCD will get into an endless sync cycle.
+        prometheus-node-exporter:
+          containerSecurityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 100m
+        grafana:
+          initChownData:
+            resources:
+              requests:
+                cpu: 100m
+          persistence:
+            enabled: true
+            size: 50Gi
+          admin:
+            existingSecret: grafana-admin-secret
+          grafana.ini:
+            users:
+              viewers_can_edit: true
+          resources:
+            requests:
+              cpu: 200m
+          sidecar:
+            dashboards:
+              # Grafana collects dashboard configurations from all ConfigMaps and Secrets in all namespaces 
+              # that have the label 'grafana_dashboard: "1"'
+              label: grafana_dashboard
+              labelValue: "1"
+              searchNamespace: ALL
+              folderAnnotation: grafana_folder
+              provider:
+                foldersFromFilesStructure: true
+            datasources:
+              # Grafana collects datasource configurations from all ConfigMaps and Secrets in all namespaces 
+              # that have the label 'grafana_datasource: "1"'
+              label: grafana_datasource
+              enabled: true
+              searchNamespace: ALL
+            resources:
+              requests:
+                cpu: 100m
+          # This is necessary because the Grafana pod mounts a volume.
+          # If a deployment is used, in case of an upgrade, another Pod is spawned, which tries
+          # to mount the volume that is already mounted to the existing pod. This fails and blocks the upgrade.
+          # If a StatefulSet is used, the existing Pod is terminated before the new Pod is started.
+          useStatefulSet: true
+        prometheusOperator:
+          admissionWebhooks:
+            namespaceSelector:
+              matchExpressions:
+                - key: control-plane
+                  operator: NotIn
+                  values:
+                    - 'true'
+                - key: kubernetes.azure.com/managedby
+                  operator: NotIn
+                  values:
+                    - aks            
+        prometheus:
+          prometheusSpec:
+            # the documentation of the values podMonitorSelectorNilUsesHelmValues and serviceMonitorSelectorNilUsesHelmValues are unclear:
+            # if these values are true, which they are by default, the helm chart will create selectors with a label matching for the prometheus installation
+            # which means it limits the scrapping/discovery of serviceMonitors and podMonitors to the prometheus installation.
+            # By setting these values to false the selectors will be empty and therfore scan all namespaces which is the prefered way.
+            # 
+            # Why not use serviceSelector: {} ?
+            # The serviceSelector configuration does not work for this due to the fact that the helm chart checks by if if the serviceSelector config parameter is filled.
+            # an {} would result in a "false" which then defaults to the formentioned lableselector.
+            # Which only leaves the option to disable e.g. serviceMonitorSelectorNilUsesHelmValues which then results in an else for a "all namespace" selector, due to the fact that a
+            # configuration of serviceSelector: {} would be ignored.
+            podMonitorSelectorNilUsesHelmValues: false
+            serviceMonitorSelectorNilUsesHelmValues: false
+            storageSpec: 
+              volumeClaimTemplate:
+                spec:
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 50Gi    
+            enableRemoteWriteReceiver: true
+            remoteWrite:
+              - url: "http://kube-prometheus-stack-prometheus.monitoring:9090"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
