@@ -28,8 +28,6 @@ spec:
           persistence:
             enabled: true
             size: 50Gi
-          admin:
-            existingSecret: grafana-admin-secret
           grafana.ini:
             users:
               viewers_can_edit: true
